@@ -9,12 +9,12 @@ from telegram.ext import (
 # CONFIGURACIÓN PRINCIPAL
 # ===========================
 
-TOKEN = os.getenv("BOT_TOKEN")  # ← AHORA SE LEE DE ENV VAR
+TOKEN = os.getenv("BOT_TOKEN")  # ahora el token se toma de Railway
 
 if not TOKEN:
     raise SystemExit("❌ ERROR: Falta la variable BOT_TOKEN en Railway.")
 
-CUENTAS_FILE = os.getenv("DB_FILE", "cuentas.json")  # archivo JSON
+CUENTAS_FILE = os.getenv("DB_FILE", "cuentas.json")
 
 # Lista exacta de administradores autorizados
 ADMIN_IDS = [
@@ -37,13 +37,16 @@ def cargar_cuentas():
     if not os.path.exists(CUENTAS_FILE):
         with open(CUENTAS_FILE, "w") as f:
             json.dump({}, f, indent=4)
+
     with open(CUENTAS_FILE, "r") as f:
         return json.load(f)
 
+
 def guardar_cuentas(data):
-    """Guarda los cambios en el archivo."""
+    """Guarda los cambios en el archivo JSON."""
     with open(CUENTAS_FILE, "w") as f:
         json.dump(data, f, indent=4)
+
 
 async def es_admin_autorizado(update: Update):
     """Verifica si el usuario es uno de los admins permitidos."""
@@ -58,7 +61,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ===========================
-# COMANDO /newacc (solo admins por privado)
+# COMANDO /newacc  (solo admins / privado)
 # ===========================
 async def newacc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -73,7 +76,9 @@ async def newacc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 5:
-        await update.message.reply_text("Uso: /newacc <nombre> <correo> <contraseña> <usos> <nota>")
+        await update.message.reply_text(
+            "Uso: /newacc <nombre> <correo> <contraseña> <usos> <nota>"
+        )
         return
 
     nombre_servicio = context.args[0].capitalize()
@@ -86,7 +91,7 @@ async def newacc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     capacidad = int(capacidad)
-    nota = " ".join(context.args[4:])
+    nota = " ".join(context.args[4:])  # nota con espacios
 
     data = cargar_cuentas()
     data[nombre_servicio] = {
@@ -98,10 +103,11 @@ async def newacc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "creador": user.username or user.first_name or "usuario",
         "creador_id": user.id
     }
+
     guardar_cuentas(data)
 
     mensaje = f"""
-✅ Cuenta agregada con éxito
+✅ cuenta agregada con éxito! 
 
 servicio: {nombre_servicio}
 correo: {correo}
@@ -125,12 +131,12 @@ async def acclist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for nombre, info in data.items():
         mensaje += f" 𑁯  {nombre} ({info['restantes']} usos restantes)\n"
 
-    mensaje += "\n⏤  usa /get <servicio> en PRIVADO."
+    mensaje += "\n⏤  puedes solicitar una usando /get + nombre en PRIVADO."
 
     await update.message.reply_text(mensaje)
 
 # ===========================
-# COMANDO /get
+# COMANDO /get  (solo privado)
 # ===========================
 async def get(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -141,48 +147,50 @@ async def get(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 1:
-        await update.message.reply_text("Uso: /get <nombre>")
+        await update.message.reply_text("Uso: /get <nombre de la cuenta>")
         return
 
     nombre_servicio = context.args[0].capitalize()
     data = cargar_cuentas()
 
     if nombre_servicio not in data:
-        await update.message.reply_text("❌ No existe una cuenta con ese nombre.")
+        await update.message.reply_text("❌ No hay una cuenta con ese nombre.")
         return
 
     cuenta = data[nombre_servicio]
 
+    # restar uso
     cuenta["restantes"] -= 1
     usos_actuales = cuenta["max"] - cuenta["restantes"]
 
+    # borrar cuenta si ya no quedan usos
     if cuenta["restantes"] <= 0:
         del data[nombre_servicio]
 
     guardar_cuentas(data)
 
     mensaje = f"""
-⠀ઈઉ⠀solicitaste acceso a {nombre_servicio}
+⠀ઈઉ⠀has solicitado acceso a {nombre_servicio}
 
-𔗨۪ 𝆬 correo: {cuenta['correo']}
-𔗨۪ 𝆬 contraseña: {cuenta['contraseña']}
-𔗨۪ 𝆬 nota: {cuenta.get('nota', 'sin nota')}
-𔗨۪ 𝆬 cuenta by: @{cuenta['creador']}
+𔗨۪ 𝆬   correo: {cuenta['correo']}
+𔗨۪ 𝆬   contraseña: {cuenta['contraseña']}
+𔗨۪ 𝆬   nota: {cuenta.get('nota', 'sin nota')}
+𔗨۪ 𝆬   cuenta by: @{cuenta['creador']}
 """
     await update.message.reply_text(mensaje)
 
+    # notificación al creador
     creador_id = cuenta.get("creador_id")
     if creador_id:
         try:
             await context.bot.send_message(
                 chat_id=creador_id,
-                text=f"""📩 se solicitó la cuenta que agregaste:
+                text=f"""📩 se solicitó la cuenta que agregaste!
 
 servicio: {nombre_servicio}
 correo: {cuenta['correo']}
 usos actuales: {usos_actuales} de {cuenta['max']}
-solicitado por: @{user.username or user.first_name}
-"""
+solicitado por: @{user.username or user.first_name}"""
             )
         except:
             pass
@@ -195,11 +203,11 @@ async def removeacc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if chat.type != "private":
-        await update.message.reply_text("⚠️ Solo por privado.")
+        await update.message.reply_text("⚠️ Este comando solo puede usarse en privado.")
         return
 
     if not await es_admin_autorizado(update):
-        await update.message.reply_text("🚫 No tienes permiso.")
+        await update.message.reply_text("🚫 No tienes permiso para usar este comando.")
         return
 
     if len(context.args) < 1:
@@ -223,10 +231,11 @@ async def removeacc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guardar_cuentas(data)
 
     mensaje = f"""
-✅ Cuenta quitada con éxito
+✅ cuenta quitada con éxito! 
 
 servicio: {nombre_servicio}
 correo: {cuenta['correo']}
+usos máximos: {cuenta['max']}
 """
     await update.message.reply_text(mensaje)
 
