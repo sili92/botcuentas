@@ -1,4 +1,4 @@
-# main.lastbot.py
+# main.cuentas.py
 import os
 import json
 import html
@@ -9,38 +9,34 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# ---------------- logging ----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
-# ---------------- config from env ----------------
+# CONFIG
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DESTINATION_CHAT_ID = os.getenv("DESTINATION_CHAT_ID")  # can be -100... or @channelusername
-DB_FILE = os.getenv("DB_FILE", "data_lastbot.json")    # default file name
+DESTINATION_CHAT_ID = os.getenv("DESTINATION_CHAT_ID")  # opcional
+DB_FILE = os.getenv("DB_FILE", "cuentas.json")
 
 if not BOT_TOKEN:
-    log.error("❌ BOT_TOKEN not found in environment. Set BOT_TOKEN and restart.")
+    log.error("❌ BOT_TOKEN missing in environment. Add BOT_TOKEN and restart.")
     raise SystemExit(1)
 
-if not DESTINATION_CHAT_ID:
-    log.error("❌ DESTINATION_CHAT_ID not found in environment. Set DESTINATION_CHAT_ID and restart.")
-    raise SystemExit(1)
+# intentar convertir DESTINATION_CHAT_ID a int si existe
+if DESTINATION_CHAT_ID:
+    try:
+        DESTINATION_CHAT_ID = int(DESTINATION_CHAT_ID)
+        log.info("DESTINATION_CHAT_ID detectado en variables de entorno.")
+    except Exception:
+        log.info("DESTINATION_CHAT_ID es un string (por ejemplo @channel) o no convertible a int; se usará tal cual.")
+else:
+    log.info("DESTINATION_CHAT_ID no provisto — el bot NO reenviará a canal automáticamente (comportamiento por defecto).")
 
-# try convert chat id to int
-try:
-    DESTINATION_CHAT_ID = int(DESTINATION_CHAT_ID)
-except Exception:
-    # keep as string if not int (e.g., @channelname)
-    pass
-
-# ---------------- file lock ----------------
 FILE_LOCK = threading.Lock()
 
-# ---------------- helpers ----------------
-def now_month():
+def month_now():
     return datetime.now().strftime("%Y-%m")
 
-def safe_load_json(path):
+def load_json(path):
     with FILE_LOCK:
         if not os.path.exists(path):
             return {}
@@ -48,119 +44,104 @@ def safe_load_json(path):
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            log.warning("JSON file corrupted or empty, reinitializing: %s", path)
+            log.warning("JSON corrupto: %s — re-inicializando.", path)
             return {}
         except Exception as e:
-            log.exception("Error reading JSON file %s: %s", path, e)
+            log.exception("Error leyendo JSON %s: %s", path, e)
             return {}
 
-def safe_save_json(path, data):
+def save_json(path, data):
     with FILE_LOCK:
         try:
-            # ensure dir exists
-            d = os.path.dirname(path)
-            if d and not os.path.exists(d):
-                os.makedirs(d, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            log.exception("Error saving JSON file %s: %s", path, e)
+            log.exception("Error guardando JSON %s: %s", path, e)
 
-# ---------------- bot handlers ----------------
-# Example handler: /sendref (adapt to your bot's logic)
-async def sendref(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Example command that expects the user to reply to a photo.
-    It saves counting data in JSON and forwards formatted message to DESTINATION_CHAT_ID.
-    """
-    try:
-        await update.message.reply_text("✅ Comando recibido.")
-    except Exception:
-        pass
-
+# HANDLERS
+async def refe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
-        await update.message.reply_text("❗ Responde a una imagen con este comando.")
+        await update.message.reply_text("❗ Responde a una imagen con /refe.")
         return
 
     replied = update.message.reply_to_message
     if not replied.photo:
-        await update.message.reply_text("⚠️ Solo están permitidas imágenes. Responde a una imagen.")
+        await update.message.reply_text("⚠️ Solo se aceptan imágenes.")
         return
 
-    # author of the image
     img_user = replied.from_user
-    img_id = str(img_user.id)
-    img_name = img_user.username or img_user.first_name
+    uid = str(img_user.id)
+    uname = img_user.username or img_user.first_name
 
-    # load data, update counts grouped by month
-    data = safe_load_json(DB_FILE)
-    month = now_month()
-    if month not in data:
-        data[month] = {}
+    data = load_json(DB_FILE)
+    mes = month_now()
+    if mes not in data:
+        data[mes] = {}
+    if uid not in data[mes]:
+        data[mes][uid] = {"username": uname, "count": 0}
 
-    if img_id not in data[month]:
-        data[month][img_id] = {"username": img_name, "count": 0}
+    data[mes][uid]["count"] += 1
+    data[mes][uid]["username"] = uname
+    save_json(DB_FILE, data)
 
-    data[month][img_id]["count"] += 1
-    data[month][img_id]["username"] = img_name
-    safe_save_json(DB_FILE, data)
-
-    # prepare formatted message
-    time_str = replied.date.strftime("%I:%M:%S %p")
-    caption = replied.caption or ""
-    caption = html.escape(caption)
-    photo_file_id = replied.photo[-1].file_id
+    time = replied.date.strftime("%H:%M:%S")
+    caption_original = html.escape(replied.caption or "")
+    photo_file = replied.photo[-1].file_id
 
     formatted = (
-        f"📌 Nueva referencia\n"
-        f"Usuario: @{img_name}\n"
-        f"ID: {img_id}\n"
-        f"Hora: {time_str}\n"
-        f"Texto: {caption}\n"
+        f"📌 Nueva cuenta/entrada\n"
+        f"👤 @{uname}\n"
+        f"🆔 {uid}\n"
+        f"🕒 {time}\n"
+        f"💬 {caption_original}"
     )
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Info", url="https://example.com"),
-         InlineKeyboardButton("Owner", url="https://t.me/your_owner")]
+        [InlineKeyboardButton("INFO", url="https://example.com"),
+         InlineKeyboardButton("OWNER", url="https://t.me/zilbato")]
     ])
 
-    try:
-        await context.bot.send_photo(
-            chat_id=DESTINATION_CHAT_ID,
-            photo=photo_file_id,
-            caption=formatted,
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
-        log.info("Forwarded image by %s to %s", img_name, DESTINATION_CHAT_ID)
-    except Exception as e:
-        log.exception("Failed sending photo to destination: %s", e)
-        await update.message.reply_text("❌ Error al enviar al canal.")
+    # Si DESTINATION_CHAT_ID existe, intentamos enviar al canal; si no, enviamos confirmación local
+    if DESTINATION_CHAT_ID:
+        try:
+            await context.bot.send_photo(
+                chat_id=DESTINATION_CHAT_ID,
+                photo=photo_file,
+                caption=formatted,
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            await update.message.reply_text("✅ Registrado y reenviado al canal.")
+            log.info("Reenviada imagen al canal %s (autor=%s)", DESTINATION_CHAT_ID, uname)
+            return
+        except Exception as e:
+            log.exception("Error reenviando al canal %s: %s", DESTINATION_CHAT_ID, e)
+            # caemos al comportamiento de fallback: confirmar en chat
+            await update.message.reply_text("⚠️ Registrado pero falló el reenvío al canal. Comprobando permisos.")
+            return
 
-# Example stats command: /topmonth
-async def topmonth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    data = safe_load_json(DB_FILE)
-    month = now_month()
-    if month not in data or not data[month]:
-        await update.message.reply_text("No hay referencias este mes.")
+    # fallback: no hay canal configurado, solo confirmamos en el chat
+    await update.message.reply_text("✅ Referencia registrada (no hay canal configurado).")
+
+async def toprefe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_json(DB_FILE)
+    mes = month_now()
+    if mes not in data or not data[mes]:
+        await update.message.reply_text("📭 No hay entradas este mes.")
         return
-    top = sorted(data[month].values(), key=lambda x: x.get("count", 0), reverse=True)
-    text = f"🏆 TOP - {month}\n\n"
-    for i, u in enumerate(top[:10], 1):
-        text += f"{i}. @{u.get('username','desconocido')}: {u.get('count',0)} refs\n"
+    orden = sorted(data[mes].values(), key=lambda x: x.get("count", 0), reverse=True)
+    text = f"🏆 TOP — {mes}\n\n"
+    for i, u in enumerate(orden[:10], 1):
+        text += f"{i}. @{u.get('username','desconocido')}: {u.get('count',0)}\n"
     await update.message.reply_text(text, parse_mode="HTML")
 
-# ---------------- main ----------------
-def main() -> None:
-    log.info("Starting last bot...")
+def main():
+    log.info("Iniciando bot cuentas...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # register handlers (change names to match your bot)
-    app.add_handler(CommandHandler("sendref", sendref))
-    app.add_handler(CommandHandler("topmonth", topmonth))
-
-    log.info("Bot initialized, running polling...")
+    app.add_handler(CommandHandler("refe", refe))
+    app.add_handler(CommandHandler("toprefe", toprefe))
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+    
